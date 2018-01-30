@@ -1,0 +1,393 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "AWS CodeDeploy Sample Template 'AWS_CodeDeploy_Sample_ELB_Integration': Create a multi-az, load balanced and auto-scaled sample web site running on an Apache Web Server. The application is configured to span all Availability Zones in the region. This template creates one or more Amazon EC2 instances (by default 3) and their associated IAM instance role which grants the EC2 instance access to the Amazon S3, Auto Scaling, Cloud Formation and Elastic Load Balancer API. It also creates the ELB and the CodeDeploy Service IAM Role for you. You will be billed for the AWS resources used if you create a stack from this template.",
+
+  "Parameters" : {
+    "InstanceType" : {
+      "Description" : "WebServer EC2 instance type",
+      "Type" : "String",
+      "Default" : "t2.micro",
+      "AllowedValues" : [ "t1.micro", "t2.micro", "t2.small", "t2.medium", "m1.small", "m1.medium", "m1.large", "m1.xlarge", "m2.xlarge", "m2.2xlarge", "m2.4xlarge", "m3.medium", "m3.large", "m3.xlarge", "m3.2xlarge", "c1.medium", "c1.xlarge", "c3.large", "c3.xlarge", "c3.2xlarge", "c3.4xlarge", "c3.8xlarge", "g2.2xlarge", "r3.large", "r3.xlarge", "r3.2xlarge", "r3.4xlarge", "r3.8xlarge", "i2.xlarge", "i2.2xlarge", "i2.4xlarge", "i2.8xlarge", "hi1.4xlarge", "hs1.8xlarge", "cr1.8xlarge", "cc2.8xlarge", "cg1.4xlarge"]
+,
+      "ConstraintDescription" : "must be a valid EC2 instance type."
+    },
+
+    "InstanceCount" : {
+      "Description" : "The desired instance count of the auto scaling group. This defines how many EC2 instances are launched for you.",
+      "Type" : "Number",
+      "Default" : "3",
+      "MinValue" : "2",
+      "MaxValue" : "10"
+    },
+
+    "KeyName" : {
+      "Description" : "The EC2 Key Pair to allow SSH access to the instances",
+      "Type" : "AWS::EC2::KeyPair::KeyName",
+      "ConstraintDescription" : "must be the name of an existing EC2 KeyPair."
+    },
+
+    "SSHLocation" : {
+      "Description" : "The IP address range that can be used to SSH to the EC2 instances",
+      "Type": "String",
+      "MinLength": "9",
+      "MaxLength": "18",
+      "Default": "0.0.0.0/0",
+      "AllowedPattern": "(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})/(\\d{1,2})",
+      "ConstraintDescription": "must be a valid IP CIDR range of the form x.x.x.x/x."
+    }
+  },
+
+  "Mappings" : {
+    "AWSInstanceType2Arch" : {
+      "t1.micro"    : { "Arch" : "PV64"   },
+      "t2.micro"    : { "Arch" : "HVM64"  },
+      "t2.small"    : { "Arch" : "HVM64"  },
+      "t2.medium"   : { "Arch" : "HVM64"  },
+      "m1.small"    : { "Arch" : "PV64"   },
+      "m1.medium"   : { "Arch" : "PV64"   },
+      "m1.large"    : { "Arch" : "PV64"   },
+      "m1.xlarge"   : { "Arch" : "PV64"   },
+      "m2.xlarge"   : { "Arch" : "PV64"   },
+      "m2.2xlarge"  : { "Arch" : "PV64"   },
+      "m2.4xlarge"  : { "Arch" : "PV64"   },
+      "m3.medium"   : { "Arch" : "HVM64"  },
+      "m3.large"    : { "Arch" : "HVM64"  },
+      "m3.xlarge"   : { "Arch" : "HVM64"  },
+      "m3.2xlarge"  : { "Arch" : "HVM64"  },
+      "c1.medium"   : { "Arch" : "PV64"   },
+      "c1.xlarge"   : { "Arch" : "PV64"   },
+      "c3.large"    : { "Arch" : "HVM64"  },
+      "c3.xlarge"   : { "Arch" : "HVM64"  },
+      "c3.2xlarge"  : { "Arch" : "HVM64"  },
+      "c3.4xlarge"  : { "Arch" : "HVM64"  },
+      "c3.8xlarge"  : { "Arch" : "HVM64"  },
+      "g2.2xlarge"  : { "Arch" : "HVMG2"  },
+      "r3.large"    : { "Arch" : "HVM64"  },
+      "r3.xlarge"   : { "Arch" : "HVM64"  },
+      "r3.2xlarge"  : { "Arch" : "HVM64"  },
+      "r3.4xlarge"  : { "Arch" : "HVM64"  },
+      "r3.8xlarge"  : { "Arch" : "HVM64"  },
+      "i2.xlarge"   : { "Arch" : "HVM64"  },
+      "i2.2xlarge"  : { "Arch" : "HVM64"  },
+      "i2.4xlarge"  : { "Arch" : "HVM64"  },
+      "i2.8xlarge"  : { "Arch" : "HVM64"  },
+      "hi1.4xlarge" : { "Arch" : "HVM64"  },
+      "hs1.8xlarge" : { "Arch" : "HVM64"  },
+      "cr1.8xlarge" : { "Arch" : "HVM64"  },
+      "cc2.8xlarge" : { "Arch" : "HVM64"  }
+    },
+
+    "AWSRegionArch2AMI" : {
+      "us-east-1"      : { "PV64" : "ami-50842d38", "HVM64" : "ami-08842d60", "HVMG2" : "ami-3a329952"  },
+      "us-west-2"      : { "PV64" : "ami-af86c69f", "HVM64" : "ami-8786c6b7", "HVMG2" : "ami-47296a77"  }
+    }
+
+  },
+
+  "Resources" : {
+    "CodeDeployTrustRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Sid": "1",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "codedeploy.us-east-1.amazonaws.com",
+                  "codedeploy.us-west-2.amazonaws.com"
+                ]
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Path": "/"
+      }
+    },
+
+    "CodeDeployRolePolicies": {
+      "Type": "AWS::IAM::Policy",
+      "Properties": {
+        "PolicyName": "CodeDeployPolicy",
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Resource": [
+                "*"
+              ],
+              "Action": [
+                "ec2:Describe*"
+              ]
+            },
+            {
+              "Effect": "Allow",
+              "Resource": [
+                "*"
+              ],
+              "Action": [
+                "autoscaling:CompleteLifecycleAction",
+                "autoscaling:DeleteLifecycleHook",
+                "autoscaling:DescribeLifecycleHooks",
+                "autoscaling:DescribeAutoScalingGroups",
+                "autoscaling:PutLifecycleHook",
+                "autoscaling:RecordLifecycleActionHeartbeat"
+              ]
+            }
+          ]
+        },
+        "Roles": [
+          {
+            "Ref": "CodeDeployTrustRole"
+          }
+        ]
+      }
+    },
+    "InstanceRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "ec2.amazonaws.com"
+                ]
+              },
+              "Action": [
+                "sts:AssumeRole"
+              ]
+            }
+          ]
+        },
+        "Path": "/"
+      }
+    },
+
+    "InstanceRolePolicies": {
+      "Type": "AWS::IAM::Policy",
+      "Properties": {
+        "PolicyName": "InstanceRole",
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": [
+                "autoscaling:Describe*",
+                "autoscaling:EnterStandby",
+                "autoscaling:ExitStandby",
+                "cloudformation:Describe*",
+                "cloudformation:GetTemplate",
+                "s3:Get*"
+              ],
+              "Resource": "*"
+            }
+          ]
+        },
+        "Roles": [
+          {
+            "Ref": "InstanceRole"
+          }
+        ]
+      }
+    },
+
+    "InstanceRoleInstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "Path": "/",
+        "Roles": [
+          {
+            "Ref": "InstanceRole"
+          }
+        ]
+      }
+    },
+
+    "AutoScalingGroup" : {
+      "Type" : "AWS::AutoScaling::AutoScalingGroup",
+      "Properties" : {
+        "AvailabilityZones" : { "Fn::GetAZs" : ""},
+        "DesiredCapacity" : { "Ref" : "InstanceCount" },
+        "LaunchConfigurationName" : { "Ref" : "LaunchConfig" },
+        "MinSize" : "1",
+        "MaxSize" : "10",
+        "LoadBalancerNames" : [ { "Ref" : "ElasticLoadBalancer" } ]
+      },
+      "CreationPolicy" : {
+        "ResourceSignal" : {
+          "Timeout" : "PT15M",
+          "Count"   : { "Ref" : "InstanceCount" }
+        }
+      },
+      "UpdatePolicy": {
+        "AutoScalingRollingUpdate": {
+          "MinInstancesInService": "1",
+          "MaxBatchSize": "1",
+          "PauseTime" : "PT15M",
+          "WaitOnResourceSignals": "true"
+        }
+      }
+    },
+
+    "LaunchConfig" : {
+      "Type" : "AWS::AutoScaling::LaunchConfiguration",
+      "Metadata" : {
+        "Comment" : "Install a simple application",
+        "AWS::CloudFormation::Init" : {
+          "config" : {
+            "packages" : {
+              "yum" : {
+                "httpd" : []
+              }
+            },
+
+            "files" : {
+              "/var/www/html/index.html" : {
+                "content" : { "Fn::Join" : ["\n", [
+                  "<h1>You have successfully launched the AWS CodeDeploy ELB Integration Sample.</h1>"
+                ]]},
+                "mode"    : "000644",
+                "owner"   : "root",
+                "group"   : "root"
+              },
+
+              "/etc/cfn/cfn-hup.conf" : {
+                "content" : { "Fn::Join" : ["", [
+                  "[main]\n",
+                  "stack=", { "Ref" : "AWS::StackId" }, "\n",
+                  "region=", { "Ref" : "AWS::Region" }, "\n"
+                ]]},
+                "mode"    : "000400",
+                "owner"   : "root",
+                "group"   : "root"
+              },
+
+              "/etc/cfn/hooks.d/cfn-auto-reloader.conf" : {
+                "content": { "Fn::Join" : ["", [
+                  "[cfn-auto-reloader-hook]\n",
+                  "triggers=post.update\n",
+                  "path=Resources.LaunchConfig.Metadata.AWS::CloudFormation::Init\n",
+                  "action=/opt/aws/bin/cfn-init -v ",
+                  "         --stack ", { "Ref" : "AWS::StackName" },
+                  "         --resource LaunchConfig ",
+                  "         --region ", { "Ref" : "AWS::Region" }, "\n",
+                  "runas=root\n"
+                ]]}
+              }
+            },
+            "services" : {
+              "sysvinit" : {
+                "httpd"    : { "enabled" : "true", "ensureRunning" : "true" },
+                "cfn-hup" : { "enabled" : "true", "ensureRunning" : "true",
+                              "files" : ["/etc/cfn/cfn-hup.conf", "/etc/cfn/hooks.d/cfn-auto-reloader.conf"]}
+              },
+              "codedeploy-agent": {
+                "enabled": "true",
+                "ensureRunning": "true"
+              }
+            }
+          }
+        }
+      },
+      "Properties" : {
+        "KeyName" : { "Ref" : "KeyName" },
+        "ImageId" : { "Fn::FindInMap" : [ "AWSRegionArch2AMI", { "Ref" : "AWS::Region" },
+                                          { "Fn::FindInMap" : [ "AWSInstanceType2Arch", { "Ref" : "InstanceType" }, "Arch" ] } ] },
+        "SecurityGroups" : [ { "Ref" : "InstanceSecurityGroup" } ],
+        "InstanceType" : { "Ref" : "InstanceType" },
+        "UserData"     : { "Fn::Base64" : { "Fn::Join" : ["", [
+             "#!/bin/bash -xe\n",
+             "yum update -y aws-cfn-bootstrap\n",
+             "yum install -y aws-cli\n",
+
+             "# Install the AWS CodeDeploy Agent.\n",
+             "cd /home/ec2-user/\n",
+             "aws s3 cp 's3://aws-codedeploy-us-east-1/latest/codedeploy-agent.noarch.rpm' .\n",
+             "yum -y install codedeploy-agent.noarch.rpm\n",
+
+             "/opt/aws/bin/cfn-init -v ",
+             "         --stack ", { "Ref" : "AWS::StackName" },
+             "         --resource LaunchConfig ",
+             "         --region ", { "Ref" : "AWS::Region" }, "\n",
+
+             "/opt/aws/bin/cfn-signal -e $? ",
+             "         --stack ", { "Ref" : "AWS::StackName" },
+             "         --resource AutoScalingGroup ",
+             "         --region ", { "Ref" : "AWS::Region" }, "\n"
+        ]]}},
+        "IamInstanceProfile": {
+          "Ref": "InstanceRoleInstanceProfile"
+        }
+      }
+    },
+
+    "ElasticLoadBalancer" : {
+      "Type" : "AWS::ElasticLoadBalancing::LoadBalancer",
+      "Properties" : {
+        "AvailabilityZones" : { "Fn::GetAZs" : "" },
+        "CrossZone" : "true",
+        "Listeners" : [ {
+          "LoadBalancerPort" : "80",
+          "InstancePort" : "80",
+          "Protocol" : "HTTP"
+        } ],
+        "HealthCheck" : {
+          "Target" : "HTTP:80/",
+          "HealthyThreshold" : "3",
+          "UnhealthyThreshold" : "5",
+          "Interval" : "30",
+          "Timeout" : "5"
+        },
+        "ConnectionDrainingPolicy" : {
+           "Enabled" : "true",
+           "Timeout" : "300"
+        }
+      }
+    },
+
+    "InstanceSecurityGroup" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "Enable SSH access and HTTP from the load balancer only",
+        "SecurityGroupIngress" : [ {
+          "IpProtocol" : "tcp",
+          "FromPort" : "22",
+          "ToPort" : "22",
+          "CidrIp" : { "Ref" : "SSHLocation"}
+        },
+        {
+          "IpProtocol" : "tcp",
+          "FromPort" : "80",
+          "ToPort" : "80",
+          "SourceSecurityGroupOwnerId" : {"Fn::GetAtt" : ["ElasticLoadBalancer", "SourceSecurityGroup.OwnerAlias"]},
+          "SourceSecurityGroupName" : {"Fn::GetAtt" : ["ElasticLoadBalancer", "SourceSecurityGroup.GroupName"]}
+        } ]
+      }
+    }
+  },
+
+  "Outputs" : {
+    "URL" : {
+      "Description" : "The URL of the website",
+      "Value" :  { "Fn::Join" : [ "", [ "http://", { "Fn::GetAtt" : [ "ElasticLoadBalancer", "DNSName" ]}]]}
+    },
+    "CodeDeployServiceRoleARN": {
+      "Value": {
+        "Fn::GetAtt": [
+          "CodeDeployTrustRole",
+          "Arn"
+        ]
+      }
+    },
+    "AutoScalingGroupName": {
+      "Value": {
+        "Ref" : "AutoScalingGroup"
+      }
+    }
+  }
+}
